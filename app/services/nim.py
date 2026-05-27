@@ -12,10 +12,9 @@ NVIDIA_API_KEY = os.getenv("NVIDIA_API_KEY", "")
 # Shared JSON Schema for a single schedule block.
 BLOCK_ITEM_SCHEMA = {
     "type": "object",
-    "required": ["id", "type", "title", "start", "end", "startISO", "endISO", "durationMin", "category"],
+    "required": ["id", "title", "start", "end", "startISO", "endISO", "durationMin", "category"],
     "properties": {
         "id":          {"type": "string", "description": "Existing block id e.g. 'b1'. For a brand-new block you are adding, use the literal string \"NEW\" — never invent your own id."},
-        "type":        {"type": "string", "enum": ["fixed", "floating"]},
         "title":       {"type": "string"},
         "start":       {"type": "string", "description": "Display time like '9:00 AM'"},
         "end":         {"type": "string", "description": "Display time like '10:30 AM'"},
@@ -23,8 +22,7 @@ BLOCK_ITEM_SCHEMA = {
         "endISO":      {"type": "string", "description": "ISO local datetime like '2026-05-20T10:30:00'"},
         "durationMin": {"type": "integer"},
         "category":    {"type": "string", "enum": ["class", "gym", "food", "work"]},
-        "location":    {"type": "string"},
-        "hint":        {"type": "string", "description": "Shown on floating blocks; describe why it moved or what it is"},
+        "hint":        {"type": "string", "description": "Brief note about the block — why it moved, what it is, or any context"},
         "changed":     {"type": "boolean", "description": "true if this block's time was mutated"},
     },
 }
@@ -32,27 +30,25 @@ BLOCK_ITEM_SCHEMA = {
 # ── Voice command (full CRUD) ─────────────────────────────────────────────
 SYSTEM_PROMPT = """You are LiquidTime's scheduling engine. You receive a user's current daily schedule (as JSON) and a voice command, and you output the full updated schedule via the update_schedule function.
 
-The user may ask you to MOVE, ADD, DELETE, or RENAME blocks.
+The user may ask you to MOVE, ADD, DELETE, or RENAME blocks. All blocks are freely reschedulable.
 
 RULES:
-1. Fixed blocks (type: 'fixed') are immovable anchors. Never change their startISO/endISO unless the user explicitly says to move them.
-2. Floating blocks (type: 'floating') may be rescheduled freely to avoid conflicts and honor the user's intent.
-3. Blocks must NOT overlap. If a fixed block shifts, push floating blocks out of the way (prefer pushing forward in time).
-4. Preserve durationMin exactly — never shorten or lengthen a block unless the user explicitly requests it.
-5. ADD: when the user asks to add a block, include a new block in the output with id set to the literal string "NEW". Never invent an id. Infer type (fixed for classes/labs/meetings/appointments, floating for gym/study/meals/work), category, and durationMin from the user's words. If unspecified, default to type 'floating', category 'work', durationMin 60.
-6. DELETE: when the user asks to remove a block, simply omit it from the returned array.
-7. RENAME: change only the title field of the targeted block.
-8. Otherwise return ALL blocks from the input, even unchanged ones.
-9. Set changed: true only on blocks whose startISO or endISO changed (or newly added blocks).
-10. Update the hint field on moved/added floating blocks to briefly explain the change (e.g. 'moved up · lab pushed', 'added by voice').
-11. Keep all ISO timestamps on the same calendar date as the input. Do not schedule past midnight.
-12. Display time fields (start, end) must exactly match startISO/endISO in 12-hour format with AM/PM and no leading zero (e.g. '9:00 AM', '12:30 PM').
-13. Respond ONLY via the update_schedule function call — no plain text outside the function.
+1. All blocks can be freely rescheduled to honor the user's intent.
+2. Blocks must NOT overlap. If blocks conflict, push the later block forward in time.
+3. Preserve durationMin exactly — never shorten or lengthen a block unless the user explicitly requests it.
+4. ADD: when the user asks to add a block, include a new block in the output with id set to the literal string "NEW". Never invent an id. Infer category and durationMin from the user's words. If unspecified, default to category 'work', durationMin 60.
+5. DELETE: when the user asks to remove a block, simply omit it from the returned array.
+6. RENAME: change only the title field of the targeted block.
+7. Otherwise return ALL blocks from the input, even unchanged ones.
+8. Set changed: true only on blocks whose startISO or endISO changed (or newly added blocks).
+9. Update the hint field on moved/added blocks to briefly explain the change (e.g. 'moved up', 'added by voice').
+10. Keep all ISO timestamps on the same calendar date as the input. Do not schedule past midnight.
+11. Display time fields (start, end) must exactly match startISO/endISO in 12-hour format with AM/PM and no leading zero (e.g. '9:00 AM', '12:30 PM').
+12. Respond ONLY via the update_schedule function call — no plain text outside the function.
 
 CONFLICT RESOLUTION:
-- When a change causes a conflict, push floating blocks to the earliest available gap that satisfies the user's intent.
+- When a change causes a conflict, push blocks to the earliest available gap that satisfies the user's intent.
 - A gap is valid if (gap_end - gap_start) >= block.durationMin.
-- If no valid gap exists before a fixed anchor, push the floating block after it.
 - Meal prep blocks (category: food) should stay after gym blocks when possible.
 - Blocks that have already started or finished (before current_time) should not be moved unless explicitly requested."""
 
@@ -87,15 +83,14 @@ GENERATE_SYSTEM_PROMPT = """You are LiquidTime's schedule designer. The user des
 
 RULES:
 1. Lay out a realistic day within waking hours (roughly 7:00 AM to 11:00 PM).
-2. Mark immovable commitments (lectures, labs, classes, meetings, appointments) as type 'fixed'. Mark flexible activities (gym, study, meals, personal work) as type 'floating'.
-3. Blocks must NOT overlap. Order them chronologically.
-4. Choose sensible durationMin for each block based on the user's description.
-5. category must be one of: 'class', 'gym', 'food', 'work'. Use 'class' for lectures/labs/study, 'gym' for workouts, 'food' for meals, 'work' for jobs/projects/personal work.
-6. Set id to the literal string "NEW" for EVERY block — never invent ids.
-7. All startISO/endISO must be on the given target date. Do not schedule past midnight.
-8. Display time fields (start, end) must exactly match startISO/endISO in 12-hour format with AM/PM and no leading zero (e.g. '9:00 AM', '12:30 PM').
-9. Add a short hint on floating blocks describing the activity.
-10. Respond ONLY via the create_schedule function call — no plain text outside the function."""
+2. Blocks must NOT overlap. Order them chronologically.
+3. Choose sensible durationMin for each block based on the user's description.
+4. category must be one of: 'class', 'gym', 'food', 'work'. Use 'class' for lectures/labs/study, 'gym' for workouts, 'food' for meals, 'work' for jobs/projects/personal work.
+5. Set id to the literal string "NEW" for EVERY block — never invent ids.
+6. All startISO/endISO must be on the given target date. Do not schedule past midnight.
+7. Display time fields (start, end) must exactly match startISO/endISO in 12-hour format with AM/PM and no leading zero (e.g. '9:00 AM', '12:30 PM').
+8. Add a short hint on each block describing the activity or context.
+9. Respond ONLY via the create_schedule function call — no plain text outside the function."""
 
 GENERATE_TOOL = {
     "type": "function",

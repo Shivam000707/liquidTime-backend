@@ -60,9 +60,8 @@ def normalize_block(b: dict, target_date: str) -> dict:
 
 def resolve_conflicts(blocks: list[Block]) -> list[Block]:
     """
-    Walk the schedule sorted by startISO. If a floating block overlaps the
-    previous block's end, push it forward by its durationMin.
-    Fixed blocks are never moved by this pass.
+    Walk the schedule sorted by startISO. Any block that overlaps the
+    previous block's end gets pushed forward by its durationMin.
     """
     sorted_blocks = sorted(blocks, key=lambda b: b.startISO)
     result: list[Block] = []
@@ -78,7 +77,7 @@ def resolve_conflicts(blocks: list[Block]) -> list[Block]:
 
         if curr_start >= prev_end:
             result.append(block)
-        elif block.type == "floating":
+        else:
             new_start = prev_end
             new_end   = new_start + timedelta(minutes=block.durationMin)
             hint = (block.hint or "").rstrip()
@@ -93,9 +92,6 @@ def resolve_conflicts(blocks: list[Block]) -> list[Block]:
                 "changed":  True,
                 "hint":     hint,
             }))
-        else:
-            # Fixed block collision — accept as-is (NIM should not produce this)
-            result.append(block)
 
     return result
 

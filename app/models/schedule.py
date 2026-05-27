@@ -4,7 +4,6 @@ from typing import Literal, Optional
 
 class Block(BaseModel):
     id: str
-    type: Literal["fixed", "floating"]
     title: str
     start: str                              # display '9:00 AM'
     end: str                                # display '10:30 AM'
